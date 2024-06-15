@@ -1,3 +1,2 @@
 # Z80 ASM code for Amstrad CPC #
-Collection of useful z80 ASM code
-
+Collection of useful z80 ASM code for JavaCPC emulator/real CPC
