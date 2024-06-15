@@ -8,11 +8,11 @@ push de
 
 ; start code here...
 ; BASIC rom calls
-Mode				equ &bc0e
+Mode			equ &bc0e
 PrintChar		equ &bb5a
 TextCursor		equ &bb75 ;(h=x,l=y,a=rollcount)
-Pen				equ &bb90 ;(in: A=foreground color 0..15)
-
+Pen			equ &bb90 ;(in: A=foreground color 0..15)
+; main ASM..
 main:
 	ld a, 1 ; set mode
 	call Mode
