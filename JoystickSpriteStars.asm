@@ -1,46 +1,46 @@
-Mode				equ &bc0e
-CLS				equ &bc14
+Mode			equ &bc0e
+CLS			equ &bc14
 PrintChar		equ &bb5a
-WaitChar			equ &bb06
-Ink				equ &bc32 ;(a,b,c)
+WaitChar		equ &bb06
+Ink			equ &bc32 ;(a,b,c)
 Border			equ &bc38 ;(b,c)
-Pen				equ &bb90 ;(in: A=foreground color 0..15)
-Fill				equ &bc44 
+Pen			equ &bb90 ;(in: A=foreground color 0..15)
+Fill			equ &bc44 
 TextCursor		equ &bb75 ;(h=x,l=y,a=rollcount)
 MoveCursor		equ &bb8a ;(h=x,l=y)
-ScrNextLine 		equ &BC26	;out: HL=HL+800h, or HL=HL+50h-3800h (or so)
-ScrDotPosition 	equ &BC1D ;in: DE=x, HL=y, out: HL=vram addr, C=mask, DE, B
+ScrNextLine 		equ &BC26 ;out: HL=HL+800h, or HL=HL+50h-3800h (or so)
+ScrDotPosition 		equ &BC1D ;in: DE=x, HL=y, out: HL=vram addr, C=mask, DE, B
 WaitFlyback		equ &BD19 ;wait until/unless PIO.Port B bit0=1 (vsync)
 ReadKey	 		equ &bb1b
-Linefrom			equ &bbf6  ;in: de=x, hl=y  ;\draw line from current coordinate
+Linefrom		equ &bbf6  ;in: de=x, hl=y  ;\draw line from current coordinate
 LineTo 			equ &bbf9  ;in: de=x, hl=y  ;/to specified target coordinate
 SetOrigin	 	equ &bbc9  ;in: de=x, hl=y (also does MOVE 0,0)
 GrPen			equ &bbde  ;in; a=ink color 
-GRA_LINE_ABSOLUTE equ &BBF6
-SCR_HORIZONTAL    equ &BC5F ;in: A=pen, DE=x1, BC=x2, HL=y
+GRA_LINE_ABSOLUTE 	equ &BBF6
+SCR_HORIZONTAL    	equ &BC5F ;in: A=pen, DE=x1, BC=x2, HL=y
 
 Black 			equ 0
-Blue				equ 1
+Blue			equ 1
 BrightBlue		equ 2
-Red				equ 3
+Red			equ 3
 Magenta			equ 4
 Mauve			equ 5
 BrightRed		equ 6
 Purple			equ 7
 BrightMagenta		equ 8
 Green			equ 9
-Cyan				equ 10
+Cyan			equ 10
 SkyBlue			equ 11
 Yellow			equ 12
 White			equ 13
 PastelBlue		equ 14
 Orange			equ 15
-Pink				equ 16
+Pink			equ 16
 PastelMagenta		equ 17
 BrightGreen		equ 18
-SeaGreen			equ 19
+SeaGreen		equ 19
 BrightCyan		equ 20
-Lime				equ 21
+Lime			equ 21
 PastelGreen		equ 22
 PastelCyan		equ 23
 BrightYellow		equ 24
