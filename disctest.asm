@@ -25,22 +25,23 @@
 ;; track drive is detected and read with double stepping.
 ;;
 ;; Build : pasmo disctest.asm disctest.bin   (or any Maxam style assembler)
-;; Run   : MEMORY &FFF : LOAD "DISCTEST.BIN" : CALL &1000
+;; Run   : OPENOUT"D":MEMORY &7FF:CLOSEOUT:LOAD"DISCTEST.BIN":CALL &800
 ;;         or simply RUN "DISCTEST"  (see tools/mkdsk.py)
 ;;
 ;; Keys (map screen)
 ;;      cursor keys          move around the map (SHIFT+left/right = 10 tracks)
 ;;      D / ENTER / COPY     hex + ASCII dump of the selected sector
 ;;      L                    legend, statistics and key help
+;;      C                    circular disc map (mode 1), S = other side
 ;;      ESC / M              back to the options menu
 ;;
 ;; Memory map
-;;      &1000 - ....         program
+;;      &0800 - ....         program
 ;;      TABLE  (after code)  results table, 160 x 130 bytes
 ;;      &8000 - &9FFF        8K sector buffer (ring buffer, see fdc_read_sector)
 ;; ==========================================================================
 
-	org &1000
+	org &0800
 
 ;; --------------------------------------------------------------------------
 ;; Firmware jumpblock
@@ -337,7 +338,7 @@ menu_text:
 	db 31,1,20,"ROMDOS, +3, custom. 40 track discs in"
 	db 31,1,21,"80 track drives are double stepped."
 	db 31,1,23,"Map keys: arrows, D=dump, L=legend,"
-	db 31,1,24,"ESC=menu."
+	db 31,1,24,"C=circular disc map, ESC=menu."
 	db 255
 
 ;; ==========================================================================
@@ -2065,7 +2066,7 @@ vw_key:
 	cp K_LEFT
 	jr z,vw_left
 	cp K_RIGHT
-	jr z,vw_right
+	jp z,vw_right
 	cp K_SLEFT
 	jp z,vw_left10
 	cp K_SRIGHT
@@ -2081,6 +2082,8 @@ vw_key:
 	jp z,vw_dump
 	cp "L"
 	jp z,vw_legend
+	cp "C"
+	jp z,vw_circle
 	cp "M"
 	ret z
 	jr vw_loop
@@ -2161,6 +2164,10 @@ vw_r10:
 	jp vw_loop
 vw_dump:
 	call dump_view
+	call draw_screen
+	jp vw_loop
+vw_circle:
+	call circle_view
 	call draw_screen
 	jp vw_loop
 vw_legend:
@@ -2646,6 +2653,7 @@ msg_legkeys:
 	db 31,1,21,"SHIFT+",242,243," 10 TRKS"
 	db 31,1,22,"D/ENTER HEX DUMP"
 	db 31,1,23,"ESC/M OPTIONS MENU"
+	db 31,1,24,"C CIRCULAR DISC MAP"
 	db 31,1,25,"PRESS ANY KEY",255
 
 ;; ==========================================================================
@@ -2909,6 +2917,602 @@ msg_dv9:	db "   SPACE/ARROWS = PAGE   ESC = BACK TO MAP",255
 msg_timeout:	db "TIMEOUT ",255
 
 ;; ==========================================================================
+;; Circular disc view (mode 1, 320x200, 4 inks).
+;; One side at a time, drawn as a real disc: track 0 is the outer ring, the
+;; sectors of each track go clockwise from 12 o'clock, a thin black radial
+;; gap marks the start of every sector.  Mode 1 pixels are roughly square
+;; so the circle stays round; 4 inks + checker dithering give 7 styles.
+;; Uses the sector buffer area for its tables (not needed while viewing).
+;; ==========================================================================
+CV_CX		equ 160		; centre x (pixels)
+CV_CY		equ 99		; centre y (lines)
+CV_ROUT		equ 91		; outer radius (track 0)
+CV_RIN		equ 11		; hub radius: 80 pixels for the tracks
+SECT_TAB	equ BUFFER		; 16 x 256: slot for (sectors, angle), page aligned
+RSQ_TAB		equ BUFFER+&1000	; ring boundaries, radius squared (16 bit)
+
+circle_view:
+	ld a,(cur_s)
+	ld (cv_side),a
+cv_again:
+	call cv_draw
+	call flush_keys
+	call KM_WAIT_CHAR
+	and &df
+	cp "S"
+	jr nz,cv_exit
+	ld a,(n_sides)
+	cp 2
+	jr nz,cv_again
+	ld a,(cv_side)
+	xor 1
+	ld (cv_side),a
+	jr cv_again
+cv_exit:
+	call init_inks			; back to the mode 0 palette
+	jp set_cursor_ink
+
+cv_draw:
+	ld a,1
+	call SCR_SET_MODE
+	ld hl,0
+	call SCR_SET_OFFSET
+	ld a,2				; ink 2 = errors: bright red
+	ld b,6
+	ld c,6
+	call SCR_SET_INK
+	ld a,3				; ink 3 = empty: green
+	ld b,9
+	ld c,9
+	call SCR_SET_INK
+	ld a,1
+	call TXT_SET_PEN
+	ld hl,msg_cv_title
+	call print_str
+	ld a,(cv_side)
+	add a,"0"
+	call TXT_OUTPUT
+	ld hl,msg_cv_side
+	call print_str
+	ld a,(cv_side)
+	add a,"0"
+	call TXT_OUTPUT
+	ld hl,msg_cv_trk
+	call print_str
+	ld a,(n_tracks)
+	call print_dec2
+	ld hl,msg_cv_keys
+	call print_str
+	call cv_legend
+	call cv_tables
+
+	;; scan one quadrant, row by row, and plot every pixel 4 times
+	xor a
+	ld (cv_dy),a
+cv_row:
+	ld a,(cv_dy)
+	ld e,a
+	call mul8
+	ld (cv_d2),hl			; d2 = dy*dy
+	xor a
+	ld (cv_dx),a
+	ld (cv_k),a
+	ld a,&ff
+	ld (cv_kl),a
+cv_px:
+	ld hl,(cv_d2)
+	ld de,(cv_rout2)
+	and a
+	sbc hl,de
+	jp nc,cv_nextrow		; outside the disc
+	ld hl,(cv_d2)
+	ld de,(RSQ_TAB)
+	and a
+	sbc hl,de
+	jp c,cv_nextpx			; inside the hub
+cv_adv:
+	;; move out to the ring that contains d2
+	ld a,(cv_k)
+	inc a
+	add a,a
+	ld e,a
+	ld d,0
+	ld hl,RSQ_TAB
+	add hl,de
+	ld e,(hl)
+	inc hl
+	ld d,(hl)			; rsq[k+1]
+	ld hl,(cv_d2)
+	and a
+	sbc hl,de
+	jr c,cv_ring
+	ld hl,cv_k
+	inc (hl)
+	jr cv_adv
+cv_ring:
+	ld a,(cv_k)
+	ld hl,cv_kl
+	cp (hl)
+	call nz,cv_load_ring
+	call cv_angle			; cv_a = 0..64 in the quadrant
+	;; dither parity is the same for all 4 mirrored points
+	ld a,(cv_dx)
+	ld b,a
+	ld a,(cv_dy)
+	add a,b
+	inc a				; + CV_CX + CV_CY (odd)
+	and 1
+	ld (cv_par),a
+	;; up-right: angle a
+	ld a,(cv_a)
+	ld (cv_ang),a
+	call cv_xr
+	call cv_yu
+	call cv_plot
+	;; down-right: 128-a
+	ld a,(cv_a)
+	neg
+	add a,128
+	ld (cv_ang),a
+	call cv_xr
+	call cv_yd
+	call cv_plot
+	;; down-left: 128+a
+	ld a,(cv_a)
+	add a,128
+	ld (cv_ang),a
+	call cv_xl
+	call cv_yd
+	call cv_plot
+	;; up-left: -a
+	ld a,(cv_a)
+	neg
+	ld (cv_ang),a
+	call cv_xl
+	call cv_yu
+	call cv_plot
+cv_nextpx:
+	ld a,(cv_dx)			; d2 += 2*dx+1
+	ld l,a
+	ld h,0
+	add hl,hl
+	inc hl
+	ld de,(cv_d2)
+	add hl,de
+	ld (cv_d2),hl
+	ld hl,cv_dx
+	inc (hl)
+	jp cv_px
+cv_nextrow:
+	ld hl,cv_dy
+	inc (hl)
+	ld a,(hl)
+	cp CV_ROUT+1
+	jp c,cv_row
+	ret
+
+;; point coordinates: DE = x, B = y (kept in cv_x / cv_y)
+cv_xr:
+	ld a,(cv_dx)
+	ld l,a
+	ld h,0
+	ld de,CV_CX
+	add hl,de
+	ld (cv_x),hl
+	ret
+cv_xl:
+	ld a,(cv_dx)
+	ld e,a
+	ld d,0
+	ld hl,CV_CX
+	and a
+	sbc hl,de
+	ld (cv_x),hl
+	ret
+cv_yu:
+	ld a,(cv_dy)
+	ld b,a
+	ld a,CV_CY
+	sub b
+	ld (cv_y),a
+	ret
+cv_yd:
+	ld a,(cv_dy)
+	add a,CV_CY
+	ld (cv_y),a
+	ret
+
+;; plot the point cv_x,cv_y in the style of the sector at angle cv_ang
+cv_plot:
+	call cv_class			; A = class
+	add a,a
+	ld e,a
+	ld d,0
+	ld hl,cv_styles
+	add hl,de
+	ld a,(cv_par)
+	or a
+	jr z,cvp_a
+	inc hl
+cvp_a:
+	ld a,(hl)			; ink 0-3
+	ld de,(cv_x)
+	ld hl,cv_y
+	ld b,(hl)
+	jp plot_px
+
+;; class of the current ring at angle cv_ang (0-255, clockwise from top)
+cv_class:
+	ld a,(cv_status)
+	cp TS_OK
+	jr z,cc_ok
+	cp TS_UNFORM
+	ld a,CL_UNFORM
+	ret z
+	ld a,(cv_status)
+	cp TS_ERROR
+	ld a,CL_OTHER
+	ret z
+	xor a				; not scanned
+	ret
+cc_ok:
+	ld a,(cv_n)			; SECT_TAB + (n-1)*256 + angle
+	dec a
+	add a,SECT_TAB/256
+	ld h,a
+	ld a,(cv_ang)
+	ld l,a
+	ld a,(hl)
+	bit 7,a				; first step of a sector: black gap
+	jr z,cc_slot
+	xor a
+	ret
+cc_slot:
+	add a,a
+	add a,a
+	add a,a
+	add a,SL_CLASS+2
+	ld e,a
+	ld d,0
+	ld hl,(cv_ptr)
+	add hl,de
+	ld a,(hl)
+	ret
+
+;; ring k -> track n_tracks-1-k : load its table entry
+cv_load_ring:
+	ld (cv_kl),a
+	ld b,a
+	ld a,(n_tracks)
+	dec a
+	sub b
+	ld d,a
+	ld a,(cv_side)
+	ld e,a
+	call entry_addr
+	ld (cv_ptr),hl
+	ld a,(hl)
+	ld (cv_status),a
+	inc hl
+	ld a,(hl)
+	cp MAXSLOT+1
+	jr c,clr_n
+	ld a,MAXSLOT
+clr_n:
+	ld (cv_n),a
+	or a
+	ret nz
+	xor a				; TS_OK but no sectors: draw nothing
+	ld (cv_status),a
+	ret
+
+;; cv_a = angle of (dx,dy) from the vertical, 0..64 for a quarter turn
+cv_angle:
+	ld a,(cv_dx)
+	ld b,a
+	ld a,(cv_dy)
+	ld c,a
+	ld a,b
+	cp c
+	jr z,ca_le
+	jr c,ca_le
+	;; dx > dy: a = 64 - T[dy*64/dx]
+	ld l,c
+	ld c,b
+	call ca_div
+	ld a,64
+	sub (hl)
+	ld (cv_a),a
+	ret
+ca_le:
+	;; dx <= dy: a = T[dx*64/dy]
+	ld l,b
+	call ca_div
+	ld a,(hl)
+	ld (cv_a),a
+	ret
+;; HL -> atan_tab[L*64/C]
+ca_div:
+	ld h,0
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	call div16_8
+	ld de,atan_tab
+	add hl,de
+	ret
+
+;; atan(i/64) scaled to 64 per quarter turn, i = 0..64
+atan_tab:
+	db 0,1,1,2,3,3,4,4,5,6,6,7,8,8,9,9,10,11,11,12,12,13,13,14,15,15
+	db 16,16,17,17,18,18,19,19,20,20,21,21,22,22,23,23,24,24,25,25,25
+	db 26,26,27,27,27,28,28,29,29,29,30,30,30,31,31,31,32,32
+
+;; build SECT_TAB and RSQ_TAB
+cv_tables:
+	;; SECT_TAB[n-1][s] = (s*n)/256, bit 7 set on the first step of a sector
+	ld hl,SECT_TAB
+	ld c,1				; n
+ct_n:
+	ld a,&ff
+	ld (ct_prev),a
+	ld b,0				; s
+ct_s:
+	push bc
+	push hl
+	ld a,b
+	ld e,c
+	call mul8			; s*n
+	ld a,h				; /256
+	pop hl
+	pop bc
+	push af
+	ld a,(ct_prev)
+	ld d,a
+	pop af
+	ld (ct_prev),a
+	cp d
+	jr z,ct_same
+	or &80
+ct_same:
+	ld (hl),a
+	inc hl
+	inc b
+	jr nz,ct_s			; 256 steps
+	inc c
+	ld a,c
+	cp MAXSLOT+1
+	jr nz,ct_n
+	;; ring k spans radius CV_RIN + k*80/n_tracks .. next; store r*r
+	ld hl,256*(CV_ROUT-CV_RIN)
+	ld a,(n_tracks)
+	ld c,a
+	call div16_8
+	ld (ct_step),hl			; 8.8 fixed point ring width
+	ld hl,CV_RIN*256
+	ld (ct_r),hl
+	ld ix,RSQ_TAB
+	ld a,(n_tracks)
+	inc a
+	ld b,a
+ct_ring:
+	push bc
+	;; r*r ~ hi*hi + hi*lo/128   (r = hi.lo)
+	ld a,(ct_r+1)
+	ld e,a
+	call mul8
+	push hl
+	ld a,(ct_r+1)
+	ld e,a
+	ld a,(ct_r)
+	call mul8
+	add hl,hl
+	ld e,h
+	ld d,0
+	pop hl
+	add hl,de
+	ld (ix+0),l
+	ld (ix+1),h
+	inc ix
+	inc ix
+	ld hl,(ct_r)
+	ld de,(ct_step)
+	add hl,de
+	ld (ct_r),hl
+	pop bc
+	djnz ct_ring
+	;; outer limit = last boundary
+	ld a,(n_tracks)
+	add a,a
+	ld e,a
+	ld d,0
+	ld hl,RSQ_TAB
+	add hl,de
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ld (cv_rout2),de
+	ret
+
+;; legend in the left margin: checker boxes + names
+cv_legend:
+	ld hl,cv_leg_items
+	ld a,3
+	ld (lv_row),a
+cl_item:
+	ld a,(hl)
+	cp &ff
+	ret z
+	ld (cl_inka),a
+	inc hl
+	ld a,(hl)
+	ld (cl_inkb),a
+	inc hl
+	push hl
+	;; box: x 0..7, lines (row-1)*8+1 .. +5
+	ld a,(lv_row)
+	dec a
+	add a,a
+	add a,a
+	add a,a
+	inc a
+	ld (cl_y),a
+	ld c,6
+cl_line:
+	ld b,8
+cl_dot:
+	push bc
+	ld a,b
+	dec a
+	ld e,a
+	ld d,0				; x
+	ld a,(cl_y)
+	add a,c
+	ld b,a				; y
+	add a,e
+	and 1
+	ld a,(cl_inka)
+	jr z,cl_ink
+	ld a,(cl_inkb)
+cl_ink:
+	call plot_px
+	pop bc
+	djnz cl_dot
+	dec c
+	jr nz,cl_line
+	;; name
+	ld a,(lv_row)
+	ld l,a
+	ld h,3
+	call TXT_SET_CURSOR
+	pop hl
+	call print_str
+	inc hl
+	ld a,(lv_row)
+	add a,2
+	ld (lv_row),a
+	jr cl_item
+
+;; ink A, ink B (checker), name
+cv_leg_items:
+	db 1,1,"DATA",255
+	db 3,3,"EMPTY",255
+	db 3,0,"FILLER",255
+	db 2,2,"ERROR",255
+	db 2,1,"WEAK",255
+	db 1,3,"DELETD",255
+	db 1,0,"UNFMT",255
+	db &ff
+
+;; ink A / ink B for every class (equal = solid colour)
+cv_styles:
+	db 0,0		; 0  no sector / gap
+	db 0,0		; 1
+	db 2,2		; 2  read failure
+	db 3,3		; 3  empty
+	db 3,0		; 4  filler
+	db 1,1		; 5  directory
+	db 1,1		; 6  file header
+	db 1,1		; 7  text
+	db 1,1		; 8  binary
+	db 1,1		; 9  system track
+	db 1,3		; 10 deleted data
+	db 2,1		; 11 weak
+	db 2,2		; 12 data CRC
+	db 2,2		; 13 ID error
+	db 1,0		; 14 unformatted
+	db 0,0		; 15
+
+msg_cv_title:	db 31,1,1,"CIRCULAR DISC MAP OF SIDE ",255
+msg_cv_side:	db 31,33,3,"SIDE ",255
+msg_cv_trk:	db 31,33,5,"TRACKS",31,33,6,255
+msg_cv_keys:
+	db 31,33,9,"TRACK 0",31,33,10,"= OUTER",31,33,11,"RING"
+	db 31,33,13,"SECTORS",31,33,14,"CLOCK-",31,33,15,"WISE"
+	db 31,33,16,"FROM TOP"
+	db 31,33,20,"S=OTHER",31,33,21,"SIDE"
+	db 31,33,23,"KEY=MAP",255
+
+;; plot one mode 1 pixel: DE = x (0-319), B = y (0-199), A = ink (0-3)
+plot_px:
+	push bc
+	push de
+	push hl
+	ld (pp_ink),a
+	ld a,e
+	and 3
+	ld (pp_sub),a
+	ld a,e
+	srl d
+	rra
+	srl a				; byte column = x / 4
+	ld c,a
+	call scr_addr
+	ld a,(pp_sub)
+	ld b,a
+	inc b
+	ld a,&88
+	jr pp_m
+pp_shift:
+	rrca
+pp_m:
+	djnz pp_shift
+	ld c,a				; pixel mask
+	ld a,(pp_ink)
+	ld e,a
+	ld d,0
+	push hl
+	ld hl,pp_enc
+	add hl,de
+	ld a,(hl)
+	pop hl
+	and c
+	ld e,a
+	ld a,c
+	cpl
+	and (hl)
+	or e
+	ld (hl),a
+	pop hl
+	pop de
+	pop bc
+	ret
+;; mode 1 bytes with all 4 pixels in ink 0..3
+pp_enc:	db &00,&f0,&0f,&ff
+
+;; HL = A * E
+mul8:
+	ld hl,0
+	ld d,0
+	ld b,8
+m8_loop:
+	add hl,hl
+	rla
+	jr nc,m8_next
+	add hl,de
+m8_next:
+	djnz m8_loop
+	ret
+
+;; HL = HL / C, A = remainder (C < 128)
+div16_8:
+	xor a
+	ld b,16
+d8_loop:
+	add hl,hl
+	rla
+	cp c
+	jr c,d8_next
+	sub c
+	inc l
+d8_next:
+	djnz d8_loop
+	ret
+
+;; ==========================================================================
 ;; Printing helpers (all use TXT OUTPUT, which preserves all registers)
 ;; ==========================================================================
 
@@ -3093,6 +3697,31 @@ dv_page:	db 0
 dv_offset:	dw 0
 dv_row:		db 0
 pd_pad:		db 0
+
+;; circular view
+cv_side:	db 0
+cv_dx:		db 0
+cv_dy:		db 0
+cv_d2:		dw 0
+cv_rout2:	dw 0
+cv_k:		db 0
+cv_kl:		db 0
+cv_ptr:		dw 0
+cv_status:	db 0
+cv_n:		db 0
+cv_a:		db 0
+cv_ang:		db 0
+cv_par:		db 0
+cv_x:		dw 0
+cv_y:		db 0
+ct_prev:	db 0
+ct_step:	dw 0
+ct_r:		dw 0
+cl_inka:	db 0
+cl_inkb:	db 0
+cl_y:		db 0
+pp_ink:		db 0
+pp_sub:		db 0
 
 idlist:		ds MAXIDS*5
 

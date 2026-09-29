@@ -71,6 +71,9 @@ AMSDOS header: 128 bytes; 1–8 name, 9–11 type, 18 file type, 21–22 load,
 
 ## BASIC / firmware (verified)
 
+* The program was moved from &1000 to &0800 when the circular view made the
+  code too big: the results table must stay below &8000.
+  `OPENOUT"D":MEMORY &7FF:CLOSEOUT:LOAD"DISCTEST.BIN":CALL &800` verified.
 * `MEMORY &FFF` on its own works on a 6128. `MEMORY &FFF:LOAD"x"` fails with
   *Memory full* because AMSDOS allocates a 4K buffer below HIMEM when it opens
   the file. Fix: `OPENOUT"D":MEMORY &FFF:CLOSEOUT` first.
@@ -83,6 +86,10 @@ AMSDOS header: 128 bytes; 1–8 name, 9–11 type, 18 file type, 21–22 load,
   the next character scrolls the screen and breaks direct screen addressing.
 * Mode 0 byte: left pixel in bits 7,5,3,1 (mask &AA), right pixel in bits
   6,4,2,0. SCR INK ENCODE (&BC2C) returns the byte for an ink.
+* Mode 1 byte: pixel p (0 = left) uses bit 7-p (ink bit 0) and bit 3-p
+  (ink bit 1); mask = &88 >> p; all-pixel bytes for inks 0-3 = &00 &F0 &0F &FF.
+  Mode 1 pixels are about square on a real monitor and in Caprice32 (circles
+  stay round); mode 0 pixels are 2:1 wide, mode 2 pixels 1:2 tall.
 * Screen address (offset 0): &C000 + (y and 7)×&800 + (y/8)×80 + x.
   Next line: H += 8; on carry add &C050.
 
@@ -90,6 +97,8 @@ AMSDOS header: 128 bytes; 1–8 name, 9–11 type, 18 file type, 21–22 load,
 
 * `pasmo` (apt) assembles Maxam-style source (`&` hex, `db "..."`); all
   labels are global. `jr` out of range is a hard error; switch it to `jp`.
+  `ld hl,(A-B)*256` is read as a memory load (leading bracket): write
+  `ld hl,256*(A-B)`.
   `pasmo --amsdos` writes a lower-case header name, so tools/mkdsk.py writes
   its own header instead.
 * EDSK images store per-sector ST1/ST2 and zero-size (unformatted) tracks;

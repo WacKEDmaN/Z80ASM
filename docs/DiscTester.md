@@ -17,7 +17,7 @@ drive A or B.
 ./build.sh          # needs pasmo and python3
 ```
 
-This produces `build/disctest.bin`, the raw code (load and run address &1000),
+This produces `build/disctest.bin`, the raw code (load and run address &0800),
 and `build/disctest.dsk`. The disc image holds `DISCTEST.BIN` with an AMSDOS
 header, ready for an emulator or a floppy emulator (Gotek/HxC).
 
@@ -31,13 +31,13 @@ sticks to plain `org`/`equ`/`db`/`dw`/`ds` and `&` hex numbers.
 * From BASIC, returning to BASIC when you quit:
 
   ```
-  OPENOUT"D":MEMORY &FFF:CLOSEOUT
-  LOAD"DISCTEST.BIN",&1000
-  CALL &1000
+  OPENOUT"D":MEMORY &7FF:CLOSEOUT
+  LOAD"DISCTEST.BIN",&800
+  CALL &800
   ```
 
   The `OPENOUT`/`CLOSEOUT` trick reserves AMSDOS's 4K file buffer first.
-  Without it, `MEMORY &FFF` followed by `LOAD` gives *Memory full*.
+  Without it, a low `MEMORY` followed by `LOAD` gives *Memory full*.
 
 After loading you can take out the program disc and insert the disc to test.
 
@@ -93,6 +93,7 @@ inspected.
 | SHIFT + left/right | move 10 tracks |
 | D, ENTER or COPY | hex + ASCII dump of the selected sector (the sector is read again) |
 | L | legend with how many sectors of each kind were found, plus key help |
+| C | circular disc map (see below) |
 | ESC or M | back to the options menu |
 
 The four lines under the map describe the sector under the cursor:
@@ -109,6 +110,45 @@ returns to the map. The dump header shows ST0/ST1/ST2 and how many bytes
 arrived on this read.
 
 ![hex dump](screenshots/hexdump.png) ![legend](screenshots/legend.png)
+
+## Circular disc map (C)
+
+Press **C** on the map to see the disc drawn as a real disc in mode 1
+(320×200). Mode 1 pixels are roughly square, so the circle stays round, and
+there's enough resolution for 1-pixel rings at 80 tracks or 2-pixel rings at
+40. Mode 0 pixels are twice as wide as tall, which would squash 80 rings to
+half a pixel across; mode 2 has only 2 colours and no extra vertical lines.
+
+* Track 0 is the outer ring and the last track the innermost, as on a real
+  disc. The black circle in the middle is the hub.
+* Each track's sectors are spread evenly clockwise from 12 o'clock, in
+  sector ID order. A thin black radial line marks the start of each sector.
+  The real angular position isn't known (the FDC doesn't report it), so it
+  shows sector order, not true rotation.
+* One side at a time: **S** shows the other side of a double-sided disc,
+  and any other key goes back to the map.
+* Mode 1 has 4 inks. Checker dithering of two inks gives 7 styles:
+
+| Style | Meaning |
+|-------|---------|
+| white | data (directory, file header, text, binary, system track) |
+| green | empty (&E5) |
+| green/black checker | filler |
+| red | error (data CRC, ID error, read failure) |
+| red/white checker | weak (read on a retry) |
+| white/green checker | deleted data mark |
+| white/black checker | unformatted track |
+| black | not scanned |
+
+For the exact type of a sector, use the mode 0 map and its info lines.
+
+Drawing takes a few seconds. The program works through one quarter of the
+disc pixel by pixel and mirrors it: squared distance picks the track (ring),
+a 65-entry arctangent table gives the angle, and a 16 × 256 table maps angle
+to sector for 1–16 sectors per track.
+
+![circular map of the error test disc](screenshots/circle_errors.png)
+![circular map of an 80 track ParaDOS disc](screenshots/circle_parados80.png)
 
 ## Formats
 
@@ -161,9 +201,9 @@ returns the side 0 IDs (H=0) again, so that counts as one side.
 The results for up to 80 tracks × 2 sides × 16 sectors are kept in memory.
 The map, info lines and legend are drawn from this table.
 
-Memory: program &1000 onwards, results table page-aligned after the code
-(ends at about &7C40, checked in `build/disctest.sym`), sector buffer
-&8000–&9FFF. Everything below HIMEM (&A67B) is left for AMSDOS.
+Memory: program &0800 onwards, results table page-aligned after the code
+(&2800–&7940; `build.sh` stops with an error if it would reach &8000), sector
+buffer &8000–&9FFF. The circular view reuses the buffer area for its tables. Everything below HIMEM (&A67B) is left for AMSDOS.
 
 ## Limitations
 

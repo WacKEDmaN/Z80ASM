@@ -3,7 +3,7 @@
 mkdsk.py - build Amstrad CPC disc images (.DSK, extended format) for DISCTEST.
 
   mkdsk.py program BIN DSK      put BIN on a DATA format disc as DISCTEST.BIN
-                                (AMSDOS header, load/run address &1000) so it
+                                (AMSDOS header, load/run address = start of the binary (the org, &0800)) so it
                                 can be started with RUN"DISCTEST
   mkdsk.py tests DIR            write the test disc images used to check
                                 DISCTEST in an emulator (see docs/DiscTester.md)
@@ -151,11 +151,14 @@ class CpmDisc:
         return self.tracks
 
 
+LOAD = 0x0800  # must match "org" in disctest.asm
+
+
 def program_disc(binfile, dskfile):
     code = open(binfile, "rb").read()
     disc = CpmDisc()
     disc.add_file("DISCTEST", "BIN",
-                  amsdos_header("DISCTEST", "BIN", 0x1000, len(code), 0x1000) + code)
+                  amsdos_header("DISCTEST", "BIN", LOAD, len(code), LOAD) + code)
     write_edsk(dskfile, disc.finish(), 1)
 
 

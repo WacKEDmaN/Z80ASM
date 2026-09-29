@@ -13,7 +13,7 @@ sites (cpcwiki, seasip) are blocked from the cloud container; GitHub raw
 
 ## Assemble
 - `apt-get install -y pasmo` if missing.
-- Source style: Maxam/WinAPE (`org &1000`, `&` hex, `db "text",255`,
+- Source style: Maxam/WinAPE (`org &0800`, `&` hex, `db "text",255`,
   labels with colon, no local labels). Keep it portable: no pasmo-only
   directives.
 - `pasmo prog.asm build/prog.bin build/prog.sym`. `jr` out of range is a
@@ -25,7 +25,7 @@ sites (cpcwiki, seasip) are blocked from the cloud container; GitHub raw
 
 ## Disc images
 - `tools/mkdsk.py program BIN DSK` writes DATA-format EDSK with the file
-  (AMSDOS header, load/exec &1000; edit program_disc() for other addresses).
+  (AMSDOS header, load/exec = LOAD in mkdsk.py, keep it equal to the org).
 - `tools/mkdsk.py tests DIR` writes the error/format test discs.
 - The `sector()`/`write_edsk()` helpers make any custom layout (ST1/ST2
   flags, None = unformatted track).
@@ -41,7 +41,7 @@ sites (cpcwiki, seasip) are blocked from the cloud container; GitHub raw
    save round trips.
 Rules: one key string only; `$W` (2s) between screenshots and before
 `$QUIT`; `LIMIT=0` for long scans. Start with RUN" (quitting then resets
-the CPC), or `OPENOUT"D":MEMORY &FFF:CLOSEOUT` + LOAD + CALL to test returning
+the CPC), or `OPENOUT"D":MEMORY &7FF:CLOSEOUT` + LOAD + CALL &800 to test returning
 to BASIC.
 
 ## Known emulator limits
